@@ -10,10 +10,19 @@ import sys
 import os
 import psutil
 import json
+import time
 import numpy as np
 import pandas as pd
 from pandas import json_normalize
+from datetime import datetime
+from collections import Counter
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import TweetTokenizer
+nltk.download('stopwords')
 
+
+starttime = time.time()
 
 ##############################################################################
 ## Input
@@ -56,9 +65,20 @@ used_columns = [
     'retweeted_status.extended_tweet.entities.urls',
     'retweeted_status.extended_tweet.entities.user_mentions',
     'retweeted_status.extended_tweet.entities.media',
-    'in_reply_to_status_id_str',
-    'retweet_count',
     'quoted_status.id_str',
+    'quoted_status.text',
+    'quoted_status.entities.hashtags',
+    'quoted_status.entities.urls',
+    'quoted_status.entities.user_mentions',
+    'quoted_status.entities.media',
+    'quoted_status.extended_tweet.full_text',
+    'quoted_status.extended_tweet.entities.hashtags',
+    'quoted_status.extended_tweet.entities.urls',
+    'quoted_status.extended_tweet.entities.user_mentions',
+    'quoted_status.extended_tweet.entities.media',
+    'in_reply_to_status_id_str',
+    'quote_count',
+    'retweet_count',
     'created_at',
     'user.id_str',
     'user.followers_count',
@@ -112,9 +132,6 @@ print('{} user ids in transition table'.format(str(len(user_trans_table))))
 
 tf = pd.DataFrame()
 
-process = psutil.Process(os.getpid())
-print('Process using {} bytes of memory'.format(process.memory_info().rss))
-
 
 
 ##############################################################################
@@ -137,166 +154,198 @@ old_to_new_id = {old_id:np.int64(idx+1) for idx, old_id in df['id_str'].items()}
 ### Helper Functions
 ######################################
 
-# Convert old id to new id for 'reply_of' or 'retweet_of' or 'quoted_of' column
+# Convert old twitter api id to new id for 'retweet_of' or 'reply_of' column
 def conv_id(old_id):
     if old_id == 0:
-        return 0  # default value if tweet is not a reply/retweet/quote
+        return 0  # default value if tweet is not a retweet/quote or reply
     
-    no_parent = 0  # default value if parent of reply/retweet/quote tweet is not in dataset
+    no_parent = 0  # default value if parent of retweet/quote or reply tweet is not in dataset
     
     return old_to_new_id.get(old_id, no_parent)
 
 
-# Remove source tweets and their retweets x days before the last day of the dataset, to fix retweet statistics, since most retweets occur x days after the original tweet
+# Get the id of the parent tweet for a retweet/quote
+# Row of df
+def retweet_of(row):
+    # retweets of quotes have both 'quoted_status' and 'retweeted_status' fields
+    # 'quoted_status' contains the parent tweet, therefore it's checked first
+    
+    if row['quoted_status.id_str'] != 0:
+        return conv_id(row['quoted_status.id_str'])
+    
+    if row['retweeted_status.id_str'] != 0:
+        return conv_id(row['retweeted_status.id_str'])
+    
+    return 0
+
+
+# Remove source tweets and their retweets/quotes and replies 3 days before the last day of the dataset, to fix retweet statistics, since most retweets occur 3 days after the original tweet
 # Returns true if tweet should be removed
+# Row of tf
 def retweet_fix(row):
     cutoff_days = pd.offsets.Day(3)
-    if row['pure_source'] == True:
-        if row['date'] + cutoff_days > row['last_day']:
+    if row['source'] == True | row['reply'] == True:
+        if datetime.date(row['date'] + cutoff_days) > row['last_day']:
             return True
     elif row['retweet_of'] != 0:
-        if tf.loc[id2index(row['retweet_of'])]['date'] + cutoff_days > row['last_day']:
+        if datetime.date(tf.loc[id2index(row['retweet_of'])]['date'] + cutoff_days) > row['last_day']:
             return True
     return False
 
 
-# Get retweet count for id using retweet_counts: series of (id, n_retweeted)
-def get_retweet_count(id_, retweet_counts):
+# Remove retweets/quotes of source tweets outside the dataset
+# Iterates the retweet/quote tree from bottom to top, and marks the tweet for deletion if an ancestor is outside the dataset
+# Row of tf
+def remove_retweets_of_outside(row):
+    while row['retweet'] == True:
+        if row['retweet_of'] == 0:
+            return True
+        row = tf.loc[id2index(row['retweet_of'])]  # check next retweet/quote in chain
+    return False
+
+
+# Remove replies of source tweets outside the dataset
+# Iterates the reply tree from bottom to top, and marks the tweet for deletion if an ancestor is outside the dataset
+# Row of tf
+def remove_replies_of_outside(row):
+    while row['reply'] == True:
+        if row['reply_of'] == 0:
+            return True
+        row = tf.loc[id2index(row['reply_of'])]  # check next reply in chain
+    return False
+
+
+# Get retweet/quote count for id using retweet_counts: series of (id, n_retweeted)
+def get_retweet_count(id_):
     if id_ not in retweet_counts:
         return 0
     return retweet_counts.loc[id_]
 
 
-# Count hashtags/urls/mentions/media for one tweet
-def count_entity(row, entity):
-    if row['retweeted_status.id_str'] == 0:
-        if row['truncated']:
-            column = 'extended_tweet.entities.' + entity
-        else:
-            column = 'entities.' + entity
+# Returns the correct entity depending on if the tweet is extended or not
+# entity_name: 'text', 'hashtags', 'urls', 'user_mentions', 'polls', 'media'
+def get_entity(row, entity_name):   
+    if row['extended_tweet.full_text'] != 0:
+        if entity_name == 'text':
+            return row['extended_tweet.full_text']
+        return row['extended_tweet.entities.' + entity_name]
     else:
-        if row['retweeted_status.extended_tweet.full_text'] != 0:
-            column = 'retweeted_status.extended_tweet.entities.' + entity
-        else:
-            column = 'retweeted_status.entities.' + entity
-        
-    if row[column] == 0:
+        if entity_name == 'text':
+            return row['text']
+        return row['entities.' + entity_name]
+
+
+# Count hashtags/urls/mentions/media for one tweet
+# Row of df
+def count_entity(row, entity_name):
+    entity = get_entity(row, entity_name)
+    
+    if entity == 0:
         return 0
     
-    return len(row[column])
+    return len(entity)
 
     
 # Count media of certain type for one tweet
+# Row of df
 def count_media(row, type_):
-    if row['retweeted_status.id_str'] == 0:
-        if row['truncated']:
-            column = 'extended_tweet.entities.media'
-        else:
-            column = 'entities.media'
-    else:
-        if row['retweeted_status.extended_tweet.full_text'] != 0:
-            column = 'retweeted_status.extended_tweet.entities.media'
-        else:
-            column = 'retweeted_status.entities.media'
+    media = get_entity(row, 'media')
     
-    if row[column] == 0:
+    if media == 0:
         return 0
     
     count = 0
-    for media in row[column]:
-        if media['type'] == type_:
+    for m in media:
+        if m['type'] == type_:
             count += 1
     
     return count
 
 
-# Count length of text for one tweet
-def count_text(row):
-    if row['retweeted_status.id_str'] == 0:
-        if row['truncated']:
-            column = 'extended_tweet.full_text'
-        else:
-            column = 'text'
-    else:
-        if row['retweeted_status.extended_tweet.full_text'] != 0:
-            column = 'retweeted_status.extended_tweet.full_text'
-        else:
-            column = 'retweeted_status.text'
-            
-    return len(row[column])
+# Count text length of one tweet
+# Row of df
+def count_text(row):  
+    return len(get_entity(row, 'text'))
 
 
 ######################################
 ### Time/Date Columns
 ######################################
 
-tf['date'] = pd.to_datetime(df['created_at'])  # whole date
+tf['timestamp'] = pd.to_datetime(df['created_at'])  # timestamp with second accuracy
 
-tf['time'] = tf['date'].dt.time  # only time, regardless of day
+tf['time'] = tf['timestamp'].dt.time  # only time, regardless of date
 
-tf['hour'] = tf['date'].dt.hour  # only hour, regardless of day
+tf['hour'] = tf['timestamp'].dt.hour  # only hour, regardless of date
 
-tf['day'] = tf['date'].dt.day  # only day
+tf['date'] = tf['timestamp'].dt.date  # only date
 
-tf['weekday_enc'] = tf['date'].dt.dayofweek  # weekday encoded: (Monday == 0, Tuesday == 1, ..., Sunday == 6)
+tf['weekday_enc'] = tf['timestamp'].dt.dayofweek  # weekday encoded: (Monday == 0, Tuesday == 1, ..., Sunday == 6)
 
-tf['weekday'] = tf['date'].dt.day_name()  # weekday as string (Monday, Tuesday, ..., Sunday)
+tf['weekday'] = tf['timestamp'].dt.day_name()  # weekday as string (Monday, Tuesday, ..., Sunday)
 
 tf['first_day'] = tf['date'][0]  # first day of any tweet in the dataset
 
-tf['last_day'] = tf['date'][len(tf) - 1]  # last day of any tweet in the dataset
+tf['last_day'] = tf['date'][len(tf) - 1]  # last day of any tweet in the dataset (without retweet fix)
 
 
 ######################################
 ### Tweet Types
 ######################################
 
-# Pure source
-# not reply, not retweet
+# Source
+# not retweet, not quote, not reply
 
-tf['pure_source'] = (df['retweeted_status.id_str'] == 0) & (df['in_reply_to_status_id_str'] == 0)
+tf['source'] = (df['retweeted_status.id_str'] == 0) & (df['quoted_status.id_str'] == 0) & (df['in_reply_to_status_id_str'] == 0)
 
 
 # Retweet
-# 'retweet'==True and 'retweet_of'==0 => tweet is a retweet, but parent is not in dataset
-# 'retweeted_count_int' => number of retweets of this tweet in the dataset
-# 'retweeted_count_ext' => number of retweets of this tweet in and outside the dataset
-# 'retweeted'==True => there is a retweet of this tweet in the dataset (retweets of retweets also count)
+# 'retweet' => tweet is a retweet/quote
+# 'retweeted_count' => number of retweets/quotes of this tweet in the dataset
+# 'retweeted'==True => there is a retweet/quote of this tweet in the dataset
 
-tf['retweet'] = df['retweeted_status.id_str'] != 0
+tf['retweet'] = (df['retweeted_status.id_str'] != 0) | (df['quoted_status.id_str'] != 0)
 
-tf['retweet_of'] = df['retweeted_status.id_str'].apply(conv_id)
-
-# Remove source tweets and their retweets x days before the last day of the dataset, to fix retweet statistics, since most retweets occur x days after the original tweet
-to_remove = tf.apply(retweet_fix, axis=1)  # series of (id, to_remove), which tweets need to be removed
-tf.drop(to_remove[to_remove == True].index, inplace=True)
-print('{} tweets removed for retweet fix'.format(len(to_remove[to_remove == True])))
-del to_remove
-
-retweet_counts = tf[tf['retweet_of'] != 0]['retweet_of'].value_counts()  # series of (id, n_retweeted), how many times did tweet with id get retweeted within the dataset
-tf['retweeted_count_int'] = tf['id'].apply(get_retweet_count, args=(retweet_counts,))
-del retweet_counts
-
-tf['retweeted_count_ext'] = df['retweet_count']  # TODO currently always 0
-
-tf['retweeted'] = tf['retweeted_count_int'] != 0
+tf['retweet_of'] = df.apply(retweet_of, axis=1)
 
 
-# Quote
-# 'quote'==True and 'quote_of'==0 => tweet is a quote, but parent is not in dataset
-# 'quote'==True and 'reweet'==True => retweet of quote
+# Retweet with comment (quote in the twitter API)
 
-tf['quote'] = df['quoted_status.id_str'] != 0
-
-tf['quote_of'] = df['quoted_status.id_str'].apply(conv_id)
+tf['retweet_with_comment'] = (df['quoted_status.id_str'] != 0)
 
 
 # Reply
-# 'reply'==True and 'reply_of'=0 => tweet is a reply, but parent is not in dataset
 
 tf['reply'] = df['in_reply_to_status_id_str'] != 0
 
 tf['reply_of'] = df['in_reply_to_status_id_str'].apply(conv_id)
+
+
+# Remove tweets and compute statistics
+
+# Remove retweets/quotes of source tweets outside the dataset
+to_remove = tf.apply(remove_retweets_of_outside, axis=1)  # series of (id, to_remove), which tweets need to be removed
+rem_count_retweets = len(to_remove[to_remove == True])
+print('{} retweets of source tweets outside the dataset removed'.format(rem_count_retweets))
+      
+# Remove replies of source tweets outside the dataset
+to_remove |= tf.apply(remove_replies_of_outside, axis=1)
+rem_count_replies = len(to_remove[to_remove == True]) - rem_count_retweets
+print('{} replies of source tweets outside the dataset removed'.format(rem_count_replies))
+
+# Remove pure source, reply tweets and their retweets/quotes 3 days before the last day of the dataset, to fix retweet/quote statistics, since most retweets/quotes occur 3 days after the original tweet
+to_remove |= tf.apply(retweet_fix, axis=1)
+rem_count_3_day_fix = len(to_remove[to_remove == True]) - rem_count_retweets - rem_count_replies
+print('{} tweets removed for 3 day fix'.format(rem_count_3_day_fix))
+
+# Remove marked tweets
+tf.drop(to_remove[to_remove == True].index, inplace=True)
+del to_remove, rem_count_retweets, rem_count_replies, rem_count_3_day_fix
+
+# Compute retweet statistics
+retweet_counts = tf[tf['retweet_of'] != 0]['retweet_of'].value_counts()  # series of (id, n_retweeted), how many times did tweet with id get retweeted within the dataset
+tf['retweeted_count'] = tf['id'].apply(get_retweet_count)
+del retweet_counts
 
 
 ######################################
@@ -363,13 +412,14 @@ tf['text_length_median'] = tf['text_length'].median()
 ### Helper Functions
 ######################################
 
-# Convert old to new user id using transition table
+# Convert old twitter api to new user id using transition table
 def conv_user_id(id_):   
     not_found_value = 0
     return user_trans_table.get(id_, not_found_value)
 
 
-# How active is the user in terms of produced statuses (tweets/retweets)
+# How active is the user in terms of produced tweets (source tweets and retweets)
+# Row of tf
 def user_activity(row):
     if row['user.account_age'] == 0:
         return None
@@ -377,7 +427,8 @@ def user_activity(row):
     return last_tweet_statuses_count / row['user.account_age']
 
 
-# How active is the user in terms of statuses and likes
+# How active is the user in terms of produced tweets and likes
+# Row of tf
 def user_tweets_likes_activity(row):
     if row['user.account_age'] == 0:
         return None
@@ -450,12 +501,70 @@ tf['user.statuses_count'] = df['user.statuses_count']
 
 tf['user.favourites_count'] = df['user.favourites_count']
 
-tf['user.account_age'] = (tf['last_day'] - pd.to_datetime(df['user.created_at'])).dt.days
+tf['user.account_age'] = (tf['last_day'] - pd.to_datetime(df['user.created_at']).dt.date).dt.days
+tf['user.account_age'] = tf['user.account_age'].astype(int)
 
 tf['user.activity'] = tf.apply(user_activity, axis=1)
+
 tf['user.mean_activity'] = tf.drop_duplicates(subset='user.id', keep='last')['user.activity'].mean()
 
 tf['user.tweets_likes_activity'] = tf.apply(user_tweets_likes_activity, axis=1)
+
+
+
+##############################################################################
+## Seperate Text Data
+##############################################################################
+
+txtf = pd.DataFrame()  # seperate text dataframe
+
+out_path_split = os.path.splitext(out_path)
+txt_out_path = out_path_split[0] + '_tweet_text' + out_path_split[1]
+
+tknzr = TweetTokenizer(preserve_case=False)
+stops = Counter(stopwords.words('german') + stopwords.words('english'))
+
+def anon_text(row):
+    text = get_entity(row, 'text')
+    
+    # anon mentions and replace shortened urls with expanded versions
+    mentions_and_urls = get_entity(row, 'user_mentions') + get_entity(row, 'urls')
+    mentions_and_urls.sort(key=lambda e: e['indices'][0])
+    
+    offset = 0
+    for mu in mentions_and_urls:
+        if 'screen_name' in mu:
+            # mention
+            mention = mu
+            user_id = str(conv_user_id(mention['id_str']))
+            indices = mention['indices']
+
+            text = text[:indices[0]+offset] + '@user' + user_id + text[indices[1]+offset:]
+            offset += len('@user' + user_id) - (indices[1] - indices[0])
+        else:
+            # url
+            url = mu
+            expanded_url = url['expanded_url']
+            indices = url['indices']
+
+            text = text[:indices[0]+offset] + expanded_url + text[indices[1]+offset:]
+            offset += len(expanded_url) - (indices[1] - indices[0])
+
+    # remove stop words
+    text = [word for word in tknzr.tokenize(text) if word not in stops]
+    
+    # remove link to tweet, which is present if it contains media
+    if count_entity(row, 'media') > 0:
+        text = text[:-1]
+    
+    return text
+
+
+txtf['id'] = tf['id']
+
+txtf['text'] = df.apply(anon_text, axis=1)
+
+txtf['text_sorted'] = txtf['text'].apply(sorted)
 
 
 
@@ -467,3 +576,6 @@ process = psutil.Process(os.getpid())
 print('Process using {} bytes of memory'.format(process.memory_info().rss))
 
 tf.to_csv(out_path, index=False)
+txtf.to_csv(txt_out_path, index=False)
+
+print('Runtime: %is' % (time.time() - starttime))

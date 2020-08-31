@@ -39,7 +39,7 @@ def binary_bool(value):
 
 print('{} tweets without author removed'.format(tf[tf['user.id'] == 0].shape[0]))
 tf = tf[tf['user.id'] != 0]  # only tweets with author
-tf = tf[tf['pure_source'] == True]  # only pure source tweets
+tf = tf[tf['source'] == True]  # only source tweets
 
 
 # Features
@@ -62,7 +62,7 @@ sf['mentions'] = tf['mention'].apply(binary_bool)
 
 sf['media'] = tf['media'].apply(binary_bool)
 
-sf['retweets'] = tf['retweeted_count_int']
+sf['retweets'] = tf['retweeted_count']
 
 
 ##############################################################################
