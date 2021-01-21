@@ -37,7 +37,7 @@ def binary_bool(value):
 
 # Filter tweets
 
-print('{} tweets without author removed'.format(tf[tf['user.id'] == 0].shape[0]))
+print('{} source tweets without author removed'.format(tf[(tf['user.id'] == 0) & (tf['source'] == True)].shape[0]))
 tf = tf[tf['user.id'] != 0]  # only tweets with author
 tf = tf[tf['source'] == True]  # only source tweets
 

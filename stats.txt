@@ -1,0 +1,69 @@
+python tweets_preproc.py tweets/hpt_vegan_tweets_utf8_sorted.json trans_tables/transitiontable_reduced_vegan_20200407.txt preproc/tweets_preproc_vegan_20200407.csv
+22325 tweets with 51 features in dataset, using 8483628 bytes of memory
+12088 user ids in transition table
+3197 retweets of source tweets outside the dataset removed
+5241 replies of source tweets outside the dataset removed
+960 tweets removed for 3 day fix
+Warning: 233 user ids not found in transition table
+Process using 996388864 bytes of memory
+Runtime: 57s
+
+python tweets_preproc.py tweets/hpt_schalke_tweets_utf8_sorted.json trans_tables/transitiontable_reduced_schalke_20200409.txt preproc/tweets_preproc_schalke_20200409.csv
+47411 tweets with 51 features in dataset, using 18016308 bytes of memory
+14160 user ids in transition table
+2561 retweets of source tweets outside the dataset removed
+5912 replies of source tweets outside the dataset removed
+1232 tweets removed for 3 day fix
+Warning: 992 user ids not found in transition table
+Process using 2035990528 bytes of memory
+Runtime: 125s
+
+python tweets_preproc.py tweets/hpt_neos_tweets_utf8_sorted.json trans_tables/transitiontable_reduced_neos_20200311.txt preproc/tweets_preproc_neos_20200311.csv   
+55843 tweets with 51 features in dataset, using 21220468 bytes of memory
+8400 user ids in transition table
+7837 retweets of source tweets outside the dataset removed
+10666 replies of source tweets outside the dataset removed
+697 tweets removed for 3 day fix
+Warning: 579 user ids not found in transition table
+Process using 2582528000 bytes of memory
+Runtime: 150s
+
+python tweets_preproc.py tweets/hpt_bvb_tweets_utf8_sorted.json trans_tables/transitiontable_reduced_bvb_20200409.txt preproc/tweets_preproc_bvb_20200409.csv
+72922 tweets with 51 features in dataset, using 27710488 bytes of memory
+22522 user ids in transition table
+33255 retweets of source tweets outside the dataset removed
+10733 replies of source tweets outside the dataset removed
+1656 tweets removed for 3 day fix
+Warning: 980 user ids not found in transition table
+Process using 3675004928 bytes of memory
+time: 184s
+
+python tweets_preproc.py tweets/hpt_fpoe_tweets_utf8_sorted.json trans_tables/transitiontable_reduced_fpoe_20200311.txt preproc/tweets_preproc_fpoe_20200311.csv
+148489 tweets with 51 features in dataset, using 56425948 bytes of memory
+21514 user ids in transition table
+9265 retweets of source tweets outside the dataset removed
+18867 replies of source tweets outside the dataset removed
+12622 tweets removed for 3 day fix
+Warning: 794 user ids not found in transition table
+Process using 4537937920 bytes of memory
+Runtime: 424s
+
+python tweets_preproc.py tweets/covid19.json trans_tables/transitiontable_reduced_political_20200505.txt tweets_preproc_covid19_political.csv
+5221360 tweets with 51 features in dataset, using 1984116928 bytes of memory
+23040 user ids in transition table
+335747 retweets of source tweets outside the dataset removed
+267413 replies of source tweets outside the dataset removed
+536797 tweets removed for 3 day fix
+Warning: 3004291 user ids not found in transition table
+Process using 59167858688 bytes of memory
+Runtime: 38571s (on doppler cluster, ~2x slower than laptop but enough memory)
+
+python tweets_preproc.py tweets/covid19.json trans_tables/transitiontable_reduced_socialdistance_20201007.txt tweets_preproc_covid19_socialdistance.csv
+5221360 tweets with 51 features in dataset, using 1984116928 bytes of memory
+51391 user ids in transition table
+335747 retweets of source tweets outside the dataset removed
+267413 replies of source tweets outside the dataset removed
+536797 tweets removed for 3 day fix
+Warning: 2026544 user ids not found in transition table
+Process using 59211100160 bytes of memory
+Runtime: 36181s (on doppler cluster, ~2x slower than laptop but enough memory)
