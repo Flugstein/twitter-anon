@@ -37,14 +37,17 @@ def binary_bool(value):
 
 # Filter tweets
 
-print('{} source tweets without author removed'.format(tf[(tf['user.id'] == 0) & (tf['source'] == True)].shape[0]))
-tf = tf[tf['user.id'] != 0]  # only tweets with author
+print('{} source tweets without author removed'.format(tf[((tf['user.adjlist_id'] == 0) | (tf['user.metis_id'] == 0)) & (tf['source'] == True)].shape[0]))
+tf = tf[tf['user.adjlist_id'] != 0]  # only tweets with author
+tf = tf[tf['user.metis_id'] != 0]  # only tweets with author
 tf = tf[tf['source'] == True]  # only source tweets
 
 
 # Features
 
-sf['author'] = tf['user.id']
+sf['author_adjlist'] = tf['user.adjlist_id']
+
+sf['author_metis'] = tf['user.metis_id']
 
 sf['verified'] = tf['user.verified'].apply(binary_bool)
 
