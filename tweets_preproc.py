@@ -1,7 +1,7 @@
 # Preprocessing of Twitter Data
 #
 # Author: Florian Lugstein (flugstein@cs.sbg.ac.at)  
-# Date: 2020-07-29
+# Date: 2021-10-28
 #
 # Documentation: https://developer.twitter.com/en/docs/tweets/data-dictionary/overview/intro-to-tweet-json
 # Examples: https://gwu-libraries.github.io/sfm-ui/posts/2016-11-10-twitter-interaction
@@ -28,14 +28,13 @@ starttime = time.time()
 ## Input
 ##############################################################################
 
-if len(sys.argv) != 5:
-    print('usage: python3 twitter_preproc.py tweets.json trans_table_adjlist.txt trans_table_metis.txt out.csv')
+if len(sys.argv) != 4:
+    print('usage: python3 twitter_preproc.py tweets.json trans_table.txt out.csv')
     exit()
 
 tweets_path = sys.argv[1]
-user_trans_table_adjlist_path = sys.argv[2]
-user_trans_table_metis_path = sys.argv[3]
-out_path = sys.argv[4]
+user_trans_table_path = sys.argv[2]
+out_path = sys.argv[3]
 
 
 # Read Dataset JSON File
@@ -120,21 +119,13 @@ print('{} tweets with {} features in dataset, using {} bytes of memory'.format(d
 
 
 # Read Transition Table
-user_trans_table_adjlist = {}
-with open(user_trans_table_adjlist_path, 'r') as f:
+user_trans_table = {}
+with open(user_trans_table_path, 'r') as f:
     for line in f:
         split_line = line.split(' ')
-        user_trans_table_adjlist[split_line[0]] = np.int64(split_line[1])
+        user_trans_table[split_line[0]] = np.int64(split_line[1])
 
-print('{} user ids in adjlist transition table'.format(str(len(user_trans_table_adjlist))))
-
-user_trans_table_metis = {}
-with open(user_trans_table_metis_path, 'r') as f:
-    for line in f:
-        split_line = line.split(' ')
-        user_trans_table_metis[split_line[0]] = np.int64(split_line[1])
-
-print('{} user ids in metis transition table'.format(str(len(user_trans_table_metis))))
+print('{} user ids in transition table'.format(str(len(user_trans_table))))
 
 
 # Create Output Dataframe
@@ -324,9 +315,11 @@ tf['weekday_enc'] = tf['timestamp'].dt.dayofweek  # weekday encoded: (Monday == 
 
 tf['weekday'] = tf['timestamp'].dt.day_name()  # weekday as string (Monday, Tuesday, ..., Sunday)
 
-tf['first_day'] = tf['date'][0]  # first day of any tweet in the dataset
+first_day = min(tf['date'])
+tf['first_day'] = first_day  # first day of any tweet in the dataset
 
-tf['last_day'] = tf['date'][len(tf) - 1]  # last day of any tweet in the dataset (without retweet fix)
+last_day = max (tf['date'])
+tf['last_day'] = last_day  # last day of any tweet in the dataset (without retweet fix)
 
 
 ######################################
@@ -420,7 +413,7 @@ tf['mention'] = tf['mention_count'] != 0
 
 # Polls
 
-tf['poll'] = (df['entities.polls'] != 0) | (df['extended_tweet.entities.polls'] != 0)
+# tf['poll'] = (df['entities.polls'] != 0) | (df['extended_tweet.entities.polls'] != 0)  # entities.polls is missing in datasets from 2021-10-18
 
 
 # Media
@@ -453,14 +446,9 @@ tf['text_length_median'] = tf['text_length'].median()
 ######################################
 
 # Convert old twitter api to new user id using transition table
-def conv_user_id_adjlist(id_):   
+def conv_user_id(id_):   
     not_found_value = 0
-    return user_trans_table_adjlist.get(id_, not_found_value)
-
-
-def conv_user_id_metis(id_):   
-    not_found_value = 0
-    return user_trans_table_metis.get(id_, not_found_value)
+    return user_trans_table.get(id_, not_found_value)
 
 
 # How active is the user in terms of produced tweets (source tweets and retweets)
@@ -496,15 +484,10 @@ def quantile(prop_value, q1, q2, q3):
 ### User ID
 ######################################
 
-tf['user.adjlist_id'] = df['user.id_str'].apply(conv_user_id_adjlist)
-n_not_found_ids = len(tf[tf['user.adjlist_id'] == 0])
+tf['user.id'] = df['user.id_str'].apply(conv_user_id)
+n_not_found_ids = len(tf[tf['user.id'] == 0])
 if (n_not_found_ids != 0):
-    print(str(n_not_found_ids) + ' user ids not found in adjlist transition table')
-
-tf['user.metis_id'] = df['user.id_str'].apply(conv_user_id_metis)
-n_not_found_ids = len(tf[tf['user.metis_id'] == 0])
-if (n_not_found_ids != 0):
-    print(str(n_not_found_ids) + ' user ids not found in metis transition table')
+    print(str(n_not_found_ids) + ' user ids not found in transition table')
 
 
 
@@ -544,8 +527,8 @@ tf['user.listed_count_mean'] = tf['user.listed_count'].mean()
 ### Activity
 ######################################
 
-lutf = tf[['user.metis_id', 'id']].drop_duplicates(subset='user.metis_id', keep='last').set_index('user.metis_id', drop=True)  # table of last tweet of every user
-tf['user.last_tweet'] = tf['user.metis_id'].apply(lambda user_id: lutf.loc[user_id]['id'])
+lutf = tf[['user.id', 'id']].drop_duplicates(subset='user.id', keep='last').set_index('user.id', drop=True)  # table of last tweet of every user
+tf['user.last_tweet'] = tf['user.id'].apply(lambda user_id: lutf.loc[user_id]['id'])
 del lutf
 
 tf['user.statuses_count'] = df['user.statuses_count']
@@ -557,7 +540,7 @@ tf['user.account_age'] = tf['user.account_age'].astype(int)
 
 tf['user.activity'] = tf.apply(user_activity, axis=1)
 
-tf['user.mean_activity'] = tf.drop_duplicates(subset='user.metis_id', keep='last')['user.activity'].mean()
+tf['user.mean_activity'] = tf.drop_duplicates(subset='user.id', keep='last')['user.activity'].mean()
 
 tf['user.tweets_likes_activity'] = tf.apply(user_tweets_likes_activity, axis=1)
 
@@ -587,7 +570,7 @@ def anon_text(row):
         if 'screen_name' in mu:
             # mention
             mention = mu
-            user_id = str(conv_user_id_adjlist(mention['id_str']))
+            user_id = str(conv_user_id(mention['id_str']))
             indices = mention['indices']
 
             text = text[:indices[0]+offset] + '@user' + user_id + text[indices[1]+offset:]

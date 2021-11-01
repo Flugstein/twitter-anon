@@ -1,7 +1,7 @@
 # Extracting Simulation Features from Preprocessed Twitter Data
 #
 # Author: Florian Lugstein (flugstein@cs.sbg.ac.at)  
-# Date: 2021-07-29
+# Date: 2021-10-28
 
 import sys
 import numpy as np
@@ -12,12 +12,13 @@ import pandas as pd
 ## Input
 ##############################################################################
 
-if len(sys.argv) != 3:
-    print('usage: python3 sim_features.py tweets_preproc.csv out.csv')
+if len(sys.argv) != 4:
+    print('usage: python3 sim_features.py tweets_preproc.csv out.csv mode')
     exit()
 
 preproc_path = sys.argv[1]
 out_path = sys.argv[2]
+mode = sys.argv[3]
 
 tf = pd.read_csv(preproc_path)
 
@@ -34,26 +35,23 @@ sf = pd.DataFrame()
 def binary_bool(value):
     return 1 if value else 0
 
-def get_retweeters_adjlist(id_):
-    return list(tf[tf['retweet_of'] == id_]['user.adjlist_id'])
+def get_retweeters_hpda(id_):
+    return list(tf[tf['retweet_of'] == id_]['user.id'])
 
-def get_retweeters_metis(id_):
-    return list(tf[tf['retweet_of'] == id_]['user.metis_id'])
+def get_retweeters_sim(id_):
+    return len(list(tf[tf['retweet_of'] == id_]['user.id']))
 
 
 # Filter tweets
 
-print('{} source tweets without author removed'.format(tf[((tf['user.adjlist_id'] == 0) | (tf['user.metis_id'] == 0)) & (tf['source'] == True)].shape[0]))
-tf = tf[tf['user.adjlist_id'] != 0]  # only tweets with author
-tf = tf[tf['user.metis_id'] != 0]  # only tweets with author
+print('{} source tweets without author removed'.format(tf[((tf['user.id'] == 0) | (tf['user.id'] == 0)) & (tf['source'] == True)].shape[0]))
+tf = tf[tf['user.id'] != 0]  # only tweets with author
 tfs = tf[tf['source'] == True]  # only source tweets
 
 
 # Features
 
-sf['author_adjlist'] = tfs['user.adjlist_id']
-
-sf['author_metis'] = tfs['user.metis_id']
+sf['author'] = tfs['user.id']
 
 sf['verified'] = tfs['user.verified'].apply(binary_bool)
 
@@ -71,9 +69,13 @@ sf['mentions'] = tfs['mention'].apply(binary_bool)
 
 sf['media'] = tfs['media'].apply(binary_bool)
 
-sf['retweeter_adjlist'] = tfs['id'].apply(get_retweeters_adjlist)
-
-sf['retweeter_metis'] = tfs['id'].apply(get_retweeters_metis)
+if mode == 'sim':
+    sf['retweeters'] = tfs['id'].apply(get_retweeters_sim)
+elif mode == 'hpda':
+    sf['retweeters'] = tfs['id'].apply(get_retweeters_hpda)
+else:
+    print("error: wrong mode")
+    exit()
 
 
 ##############################################################################
